@@ -7,7 +7,7 @@ import remarkGfm from "remark-gfm";
 // （** 后跟标点时要求前面是空格/标点，中文里前面通常是汉字），中文消息大量中招。
 import remarkCjkFriendly from "remark-cjk-friendly";
 import remarkBreaks from "remark-breaks";
-import { AppWindow, ArrowUp, BrushCleaning, Check, ChevronLeft, ChevronRight, Copy, Drama, FileCode2, FileText, Gamepad2, Github, Image as ImageIcon, Loader2, Menu, MoreVertical, Paperclip, Pencil, Pin, PinOff, Play, Plus, Square, Trash2, Wrench, X } from "lucide-react";
+import { AppWindow, ArrowDown, ArrowUp, BrushCleaning, Check, ChevronLeft, ChevronRight, Copy, Drama, FileCode2, FileText, Gamepad2, Github, Image as ImageIcon, List, Loader2, Menu, MoreVertical, Paperclip, Pencil, Pin, PinOff, Play, Plus, Square, Trash2, Wrench, X } from "lucide-react";
 import { getQaApiLogs, clearQaApiLogs, type DebugInfo } from "@/lib/api-log-store";
 import { QaFileCard } from "@/components/qa-file-card";
 import { parseQaFileMarker } from "@/lib/qa-computer-tools";
@@ -309,7 +309,8 @@ const QaMessageItem = memo(function QaMessageItem({
   // 生成中不显示（内容还不完整，复制/编辑都没有意义）。
   const showActions = !isStreaming && !thinkingOnly;
   const msgWrap = (node: ReactNode) => (
-    <div className="qa-msg-wrap">
+    // data-qa-msg-id：消息目录跳转的锚点（用属性查询，避免给 memo 组件加 prop）
+    <div className="qa-msg-wrap" data-qa-msg-id={msg.id}>
       {node}
       {showActions && (
         <div className="qa-msg-actions" data-role={msg.role}>
@@ -551,6 +552,76 @@ function QaSessionDrawer({
         </button>
       </div>
     </aside>
+  );
+}
+
+// ── 消息目录（快速跳转）───────────────────────────────
+
+/** 目录行摘要：优先正文，无正文时退回工具/提案/报错，保证每行都有可用信息。 */
+function summarizeQaMessage(msg: QaMsg): string {
+  const text = (msg.content || "")
+    .replace(/\s+/g, " ")
+    .replace(/[#*`>]/g, "")
+    .trim();
+  if (text) return text;
+  if (msg.tools?.length) return `工具调用：${msg.tools.map((tool) => tool.name).join("、")}`;
+  if (msg.pendingCommit) return "修改提案";
+  if (msg.error) return `出错：${msg.error}`;
+  return "（空消息）";
+}
+
+/**
+ * 消息目录：把整段对话压成可点的行，点一下跳到那条消息。
+ * 适合"刚刚那段关于 XX 的内容在哪"式的回看，比一条条滚快得多。
+ */
+function QaMessageOutline({
+  messages,
+  onJump,
+  onClose,
+}: {
+  messages: QaMsg[];
+  onJump: (id: string) => void;
+  onClose: () => void;
+}) {
+  const listRef = useRef<HTMLDivElement | null>(null);
+
+  // 打开时停在最新的消息上：回看通常从"我刚才在聊什么"开始，往上翻更顺手
+  useEffect(() => {
+    const el = listRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, []);
+
+  return (
+    <>
+      <button type="button" className="qa-outline-scrim" aria-label="关闭消息目录" onClick={onClose} />
+      <aside className="qa-outline" role="dialog" aria-modal="true" aria-label="消息目录">
+        <div className="qa-outline-head">
+          <span className="qa-outline-title">消息目录</span>
+          <span className="qa-outline-count">{messages.length} 条</span>
+          <button type="button" className="qa-icon-btn qa-outline-close" onClick={onClose} aria-label="关闭消息目录">
+            <X size={16} />
+          </button>
+        </div>
+        <div className="qa-outline-list hide-scrollbar" ref={listRef}>
+          {messages.length === 0 && <div className="qa-outline-empty">这个对话还没有消息</div>}
+          {messages.map((msg, index) => (
+            <button
+              key={msg.id}
+              type="button"
+              className="qa-outline-item"
+              data-role={msg.role}
+              onClick={() => onJump(msg.id)}
+            >
+              <span className="qa-outline-index">{index + 1}</span>
+              <span className="qa-outline-main">
+                <span className="qa-outline-who">{msg.role === "user" ? "我" : "小坊"}</span>
+                <span className="qa-outline-text">{summarizeQaMessage(msg)}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+      </aside>
+    </>
   );
 }
 
@@ -812,6 +883,7 @@ export function PhoneQaApp({ onClose, onNotice }: PhoneQaAppProps) {
   const snapshot = useSyncExternalStore(subscribeQaChat, getQaChatSnapshot, getQaChatSnapshot);
   const [input, setInput] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [outlineOpen, setOutlineOpen] = useState(false);
   const [repoSheetOpen, setRepoSheetOpen] = useState(false);
   const [repoConnected, setRepoConnected] = useState(false);
   const [clearToolsOpen, setClearToolsOpen] = useState(false);
@@ -839,8 +911,13 @@ export function PhoneQaApp({ onClose, onNotice }: PhoneQaAppProps) {
   const [repoWritable, setRepoWritable] = useState(false);
   const [writeMode, setWriteMode] = useState<"confirm" | "auto">("confirm");
   const bodyRef = useRef<HTMLDivElement | null>(null);
+  const messagesRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const stickToBottomRef = useRef(true);
+  /** 程序化滚动的时间窗：期间忽略 scroll 事件对「是否贴底」的改写 */
+  const ignoreScrollUntilRef = useRef(0);
+  /** 用户上滚离开底部时显示「回到最新」 */
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
 
   const refreshComposerMeta = useCallback(() => {
     setApiReady(resolveQaApiConfig() != null);
@@ -899,18 +976,80 @@ export function PhoneQaApp({ onClose, onNotice }: PhoneQaAppProps) {
     [previewItem],
   );
 
-  // 自动滚动：用户上滚阅读时不拉回底部
+  // ── 滚动：贴底跟随 + 进入会话直达最新 ──────────────
+  // 消息列表里大量气泡是 content-visibility:auto（视口外按预估高度排版），
+  // 只赋值一次 scrollTop 时真实高度往往还没算出来，就会停在中途——所以补几帧。
+  const scrollToBottomNow = useCallback(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, []);
+
+  /** 连续补帧贴底：布局稳定前逐帧校正（约 200ms），并清除「回到最新」提示。 */
+  const pinToBottom = useCallback(() => {
+    stickToBottomRef.current = true;
+    ignoreScrollUntilRef.current = Date.now() + 400;
+    setShowJumpToLatest(false);
+    let frames = 0;
+    const tick = () => {
+      if (!stickToBottomRef.current) return;
+      scrollToBottomNow();
+      if (++frames < 12) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }, [scrollToBottomNow]);
+
+  // 进入工坊 / 切换会话：直接落在最新消息（不再从最顶上一条往下滑）
+  useEffect(() => {
+    pinToBottom();
+  }, [snapshot.activeSessionId, pinToBottom]);
+
+  // 新消息：用户仍停在底部时才跟随；上滚阅读时不打扰
+  useEffect(() => {
+    if (stickToBottomRef.current) scrollToBottomNow();
+  }, [messages, scrollToBottomNow]);
+
+  // 后置撑高（图片解码、Markdown 重排、展开工具行）继续贴底，避免"到底了又没到底"
+  useEffect(() => {
+    const el = messagesRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (stickToBottomRef.current) scrollToBottomNow();
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [messages.length, scrollToBottomNow]);
+
   const handleScroll = useCallback(() => {
     const el = bodyRef.current;
     if (!el) return;
-    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    // 程序化滚动（贴底补帧 / 目录跳转）期间不改写跟随状态
+    if (Date.now() < ignoreScrollUntilRef.current) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    stickToBottomRef.current = atBottom;
+    setShowJumpToLatest(!atBottom);
   }, []);
 
-  useEffect(() => {
-    const el = bodyRef.current;
-    if (el && stickToBottomRef.current) {
-      el.scrollTop = el.scrollHeight;
-    }
+  /** 目录跳转：定位到目标消息；跳到最新一条=恢复跟随，跳到中间=暂停跟随 */
+  const jumpToMessage = useCallback((msgId: string) => {
+    const container = bodyRef.current;
+    setOutlineOpen(false);
+    if (!container) return;
+    const target = container.querySelector<HTMLElement>(`[data-qa-msg-id="${msgId}"]`);
+    if (!target) return;
+    const isLast = messages.length > 0 && messages[messages.length - 1].id === msgId;
+    stickToBottomRef.current = isLast;
+    setShowJumpToLatest(!isLast);
+    ignoreScrollUntilRef.current = Date.now() + 600;
+    // 目标上方可能还是预估高度，逐帧校正几次让落点稳定
+    let frames = 0;
+    const align = () => {
+      const containerRect = container.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      container.scrollTop += targetRect.top - containerRect.top - 12;
+      if (++frames < 6) requestAnimationFrame(align);
+    };
+    requestAnimationFrame(align);
   }, [messages]);
 
   const autoGrow = useCallback(() => {
@@ -1136,7 +1275,7 @@ export function PhoneQaApp({ onClose, onNotice }: PhoneQaAppProps) {
             </div>
           </div>
         ) : (
-          <div className="qa-messages">
+          <div className="qa-messages" ref={messagesRef}>
             {messages.map((msg) => (
               <QaMessageItem key={msg.id} msg={msg} isStreaming={msg.id === streamingMsgId} onRetry={handleRetry} onViewImage={setViewerImage} onCopy={handleCopyMessage} onEdit={handleEditMessage} />
             ))}
@@ -1303,6 +1442,30 @@ export function PhoneQaApp({ onClose, onNotice }: PhoneQaAppProps) {
         </div>
       </footer>
 
+      {/* 悬浮操作：上滚离开底部时才出现的「回到最新」+ 常驻的「消息目录」 */}
+      <div className="qa-float-stack">
+        {showJumpToLatest && (
+          <button type="button" className="qa-jump-latest" onClick={pinToBottom} aria-label="回到最新消息">
+            <ArrowDown size={15} strokeWidth={2.4} />
+            <span>回到最新</span>
+          </button>
+        )}
+        {messages.length > 0 && (
+          <button
+            type="button"
+            className="qa-outline-btn"
+            onClick={() => {
+              setDrawerOpen(false);
+              setOutlineOpen(true);
+            }}
+            aria-label="打开消息目录"
+            title="消息目录"
+          >
+            <List size={17} strokeWidth={2} />
+          </button>
+        )}
+      </div>
+
       {drawerOpen && (
         <button
           type="button"
@@ -1312,6 +1475,10 @@ export function PhoneQaApp({ onClose, onNotice }: PhoneQaAppProps) {
         />
       )}
       </div>
+
+      {outlineOpen && (
+        <QaMessageOutline messages={messages} onJump={jumpToMessage} onClose={() => setOutlineOpen(false)} />
+      )}
 
       {renameTarget && (
         <div className="qa-rename-backdrop" role="presentation" onClick={() => setRenameTarget(null)}>

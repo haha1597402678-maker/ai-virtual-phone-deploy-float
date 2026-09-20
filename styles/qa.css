@@ -2042,3 +2042,182 @@
   opacity: 0.45;
   cursor: default;
 }
+
+/* ── 悬浮操作：回到最新 / 消息目录 ──
+   贴在输入栏上方：与输入栏同宽居中（宽屏时不会飘到屏幕另一头） */
+.qa-float-stack {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 160px);
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: 68ch;
+  margin: 0 auto;
+  padding: 0 16px;
+  pointer-events: none;
+}
+.qa-float-stack > * {
+  pointer-events: auto;
+}
+/* 上滚离开底部后才出现，点一下回到最新 */
+.qa-jump-latest {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 32px;
+  padding: 0 13px;
+  border: none;
+  border-radius: 9999px;
+  background: var(--qa-accent);
+  color: var(--qa-text-inverse);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(115, 89, 230, 0.28);
+  animation: qa-fade-in 0.18s ease;
+}
+.qa-jump-latest:active {
+  transform: scale(0.95);
+}
+/* 消息目录入口：液态玻璃圆钮（与顶栏按钮同构） */
+.qa-outline-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid rgba(255, 255, 255, 0.75);
+  border-radius: 9999px;
+  cursor: pointer;
+  color: var(--qa-text-primary);
+  background: rgba(255, 255, 255, 0.7);
+  -webkit-backdrop-filter: blur(16px) saturate(1.5);
+  backdrop-filter: blur(16px) saturate(1.5);
+  box-shadow: 0 2px 8px rgba(40, 34, 20, 0.08);
+  transition: transform 0.24s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.qa-outline-btn:active {
+  transform: scale(0.9);
+}
+
+/* ── 消息目录（右侧滑出）── */
+.qa-outline-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  border: none;
+  padding: 0;
+  background: rgba(40, 34, 20, 0.18);
+  cursor: pointer;
+  animation: qa-fade-in 0.18s ease;
+}
+.qa-outline {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  z-index: 55;
+  width: min(78%, 340px);
+  display: flex;
+  flex-direction: column;
+  background: var(--qa-bg-overlay);
+  border-left: 1px solid var(--qa-border-subtle);
+  box-shadow: -6px 0 30px rgba(40, 34, 20, 0.14);
+  padding-top: var(--qa-header-safe-top);
+  animation: qa-outline-in 0.24s cubic-bezier(0.32, 0.72, 0, 1);
+}
+@keyframes qa-outline-in {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+.qa-outline-head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px 8px 18px;
+}
+.qa-outline-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--qa-text-primary);
+}
+.qa-outline-count {
+  flex: 1;
+  font-size: 11.5px;
+  color: var(--qa-text-tertiary);
+}
+.qa-outline-close {
+  width: 32px;
+  height: 32px;
+}
+.qa-outline-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 10px calc(env(safe-area-inset-bottom, 0px) + 16px);
+}
+.qa-outline-empty {
+  padding: 24px 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--qa-text-tertiary);
+}
+.qa-outline-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 10px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.qa-outline-item:hover {
+  background: var(--qa-state-hover);
+}
+.qa-outline-item:active {
+  background: var(--qa-state-active);
+}
+.qa-outline-index {
+  flex: 0 0 auto;
+  min-width: 20px;
+  padding-top: 1px;
+  font-size: 11px;
+  color: var(--qa-text-tertiary);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.qa-outline-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.qa-outline-who {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--qa-text-tertiary);
+}
+.qa-outline-item[data-role="user"] .qa-outline-who {
+  color: var(--qa-accent);
+}
+/* 摘要最多两行，长消息不把列表撑散 */
+.qa-outline-text {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--qa-text-primary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
