@@ -25,6 +25,7 @@ export function resolveVoiceConfig(characterId: string, appId?: ContentAppId): V
  * Supported providers:
  * - Minimax: REST API → hex-encoded mp3
  * - OpenAI: REST API → binary audio blob
+ * - ElevenLabs: REST API → binary mp3（浏览器直连，被 CORS 拦时回落服务端代理）
  */
 export async function synthesizeSpeech(
     text: string,
@@ -41,6 +42,10 @@ export async function synthesizeSpeech(
 
     if (provider === "OpenAI") {
         return synthesizeOpenAI(text, voiceConfig);
+    }
+
+    if (provider === "ElevenLabs") {
+        return synthesizeElevenLabs(text, voiceConfig);
     }
 
     return null;
@@ -172,6 +177,102 @@ async function synthesizeOpenAI(text: string, config: VoiceApiConfig): Promise<B
 
     const blob = await response.blob();
     return new Blob([await blob.arrayBuffer()], { type: "audio/mpeg" });
+}
+
+// ── ElevenLabs TTS ──────────────────────────────────
+
+const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io/v1";
+const DEFAULT_ELEVENLABS_MODEL = "eleven_multilingual_v2";
+// ElevenLabs 控制台里的 "Rachel"，仅作未填 Voice ID 时的兜底
+const DEFAULT_ELEVENLABS_VOICE_ID = "21m00Tcm4TlvDq8ikWAM";
+
+/** ElevenLabs 的错误体形如 {detail:{message,status}} 或 {detail:"..."}，取出可读文案。 */
+async function readElevenLabsError(response: Response): Promise<string> {
+    const raw = await response.text().catch(() => "");
+    let message = raw;
+    try {
+        const parsed = JSON.parse(raw) as { detail?: unknown; message?: unknown };
+        const detail = parsed.detail;
+        if (detail && typeof detail === "object") {
+            const inner = (detail as { message?: unknown }).message;
+            if (typeof inner === "string" && inner.trim()) message = inner.trim();
+        } else if (typeof detail === "string" && detail.trim()) {
+            message = detail.trim();
+        } else if (typeof parsed.message === "string" && parsed.message.trim()) {
+            message = parsed.message.trim();
+        }
+    } catch { /* 非 JSON，保留原文 */ }
+    message = message.replace(/\s+/g, " ").trim();
+    return `ElevenLabs 请求失败 (${response.status})${message ? `: ${message.slice(0, 300)}` : ""}`;
+}
+
+/** 浏览器跨域被拒 / 断网时 fetch 抛 TypeError——只有这种情况才值得回落到服务端代理。 */
+function isBrowserReachabilityError(error: unknown): boolean {
+    return error instanceof TypeError;
+}
+
+async function synthesizeElevenLabs(text: string, config: VoiceApiConfig): Promise<Blob | null> {
+    if (!config.apiKey) throw new Error("ElevenLabs API Key 未配置");
+
+    const baseUrl = (config.baseUrl || DEFAULT_ELEVENLABS_BASE_URL).replace(/\/+$/, "");
+    const voiceId = (config.defaultVoice || DEFAULT_ELEVENLABS_VOICE_ID).trim();
+    const model = config.model || DEFAULT_ELEVENLABS_MODEL;
+
+    // 优先浏览器直连：与 Minimax/OpenAI 同路，避开 Netlify 函数的请求体与超时限制。
+    // ElevenLabs 若不接受浏览器跨域请求，fetch 会直接抛 TypeError，此时回落服务端代理
+    // （app/api/voice/elevenlabs-tts）。业务错误（401/422 等）不回退，避免把鉴权问题
+    // 变成一个更难看懂的代理错误。
+    try {
+        const response = await fetchWithTimeout(
+            `${baseUrl}/text-to-speech/${encodeURIComponent(voiceId)}`,
+            {
+                method: "POST",
+                headers: {
+                    "xi-api-key": config.apiKey,
+                    "Content-Type": "application/json",
+                    Accept: "audio/mpeg",
+                },
+                body: JSON.stringify({ text, model_id: model }),
+            },
+        );
+        if (response.ok) {
+            const buffer = await response.arrayBuffer();
+            return new Blob([buffer], { type: "audio/mpeg" });
+        }
+        throw new Error(await readElevenLabsError(response));
+    } catch (error) {
+        if (!isBrowserReachabilityError(error)) throw error;
+        return synthesizeElevenLabsViaProxy(baseUrl, config, voiceId, model, text);
+    }
+}
+
+async function synthesizeElevenLabsViaProxy(
+    baseUrl: string,
+    config: VoiceApiConfig,
+    voiceId: string,
+    model: string,
+    text: string,
+): Promise<Blob | null> {
+    const response = await fetchWithTimeout("/api/voice/elevenlabs-tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            apiKey: config.apiKey,
+            baseUrl,
+            voiceId,
+            model,
+            text,
+        }),
+    });
+
+    if (!response.ok) {
+        const data = await response.json().catch(() => ({})) as { message?: string; error?: string };
+        throw new Error(data.message || data.error || `ElevenLabs 语音合成失败 (${response.status})`);
+    }
+
+    const buffer = await response.arrayBuffer();
+    if (!buffer.byteLength) throw new Error("ElevenLabs 未返回音频数据");
+    return new Blob([buffer], { type: "audio/mpeg" });
 }
 
 // ── iOS audio playback that coexists with speech recognition ──────────
