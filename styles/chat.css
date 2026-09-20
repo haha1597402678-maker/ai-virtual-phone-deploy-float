@@ -7129,3 +7129,32 @@
   background: currentColor;
   animation: chat-stream-cursor-blink 1s steps(2, start) infinite;
 }
+
+/* 语音条合成失败的原因提示：贴在气泡正下方（气泡本身很窄，塞不下完整原因）。
+   以前这里只有"合成失败·点击重试"，未绑定语音配置这类静默失败无从自查。 */
+.voice-msg-error {
+  margin-top: 5px;
+  max-width: 260px;
+  padding: 5px 9px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--c-danger, #d0564b) 10%, transparent);
+  color: var(--c-danger, #d0564b);
+  font-size: 11.5px;
+  line-height: 1.5;
+  word-break: break-word;
+  text-align: left;
+}
+
+/* 通话中语音合成失败的提示条：固定停在字幕区下方，不随字幕滚走 */
+.call-tts-notice {
+  flex: none;
+  margin: 0 20px 10px;
+  padding: 7px 11px;
+  border-radius: 10px;
+  background: rgba(208, 86, 75, 0.22);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-word;
+  text-align: center;
+}
