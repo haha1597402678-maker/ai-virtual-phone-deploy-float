@@ -76,6 +76,9 @@ export function VoiceCallScreen({ session, character, onEnd, onConnect, initiato
     const [subtitles, setSubtitles] = useState<SubtitleEntry[]>([]);
     const [interimText, setInterimText] = useState("");
     const [isMuted, setIsMuted] = useState(false);
+    // 语音合成失败提示：此前 TTS 失败只 console.warn，界面上什么都不显示——
+    // 用户只听到"对方没说话"，完全无从判断（未绑定/Key 失效/音色不存在）
+    const [ttsNotice, setTtsNotice] = useState("");
     const [inputMode, setInputMode] = useState<"voice" | "text">(() => androidTextInputOnly ? "text" : "voice");
     const [typedText, setTypedText] = useState("");
     const [bgImageResolved, setBgImageResolved] = useState<string | null>(null);
@@ -330,6 +333,7 @@ export function VoiceCallScreen({ session, character, onEnd, onConnect, initiato
         // 2. Switch to PROCESSING
         setCallState("PROCESSING");
         setInterimText("");
+        setTtsNotice("");
 
         try {
             // 3. Generate AI response
@@ -358,7 +362,11 @@ export function VoiceCallScreen({ session, character, onEnd, onConnect, initiato
             setCallState("AI_SPEAKING");
 
             const voiceConfig = resolveVoiceConfig(session.contactId);
-            if (voiceConfig) {
+            if (!voiceConfig) {
+                // 没绑定语音配置时过去是彻底静默的（连 catch 都不进）：说清楚原因，
+                // 否则用户只看到"对方正在说话…"却一直没有声音。
+                setTtsNotice("未绑定语音配置：请到「设置 → 配置绑定」里为该角色选择语音配置");
+            } else {
                 try {
                     const audioBlob = await synthesizeSpeech(speechText, voiceConfig);
                     if (stateRef.current === "ENDED") return;
@@ -371,6 +379,10 @@ export function VoiceCallScreen({ session, character, onEnd, onConnect, initiato
                     }
                 } catch (e) {
                     console.warn("[VoiceCall] TTS failed:", e);
+                    if (stateRef.current !== "ENDED") {
+                        const reason = e instanceof Error ? e.message : String(e);
+                        setTtsNotice(reason.trim() || "未知错误（可打开开发者工具查看控制台）");
+                    }
                 }
             }
 
@@ -681,6 +693,13 @@ export function VoiceCallScreen({ session, character, onEnd, onConnect, initiato
                         </div>
                     )}
                 </div>
+
+                {/* 合成失败提示：放在字幕区之外，不随字幕滚走 */}
+                {ttsNotice && (
+                    <div className="call-tts-notice" role="alert">
+                        ⚠️ 语音合成失败：{ttsNotice}
+                    </div>
+                )}
 
                 {inputMode === "text" && callState !== "CONNECTING" && callState !== "ENDED" && (
                     <form

@@ -2212,9 +2212,11 @@ function synthesizeVoiceForMessage(msgId: string, characterId: string, speechTex
     const task = (async () => {
         const { resolveVoiceConfig, synthesizeSpeech } = await import("@/lib/tts-service");
         const vc = resolveVoiceConfig(characterId);
-        if (!vc) throw new Error("未绑定语音配置");
+        // 失败原因必须具体：早前一律抛笼统的"合成失败"，用户和排查者都分不清是
+        // "没绑定语音配置"还是"服务商拒绝"，只能反复试听对比（用户实报）。
+        if (!vc) throw new Error("未绑定语音配置：请到「设置 → 配置绑定」里为该角色选择语音配置");
         const blob = await synthesizeSpeech(speechText, vc);
-        if (!blob) throw new Error("合成失败");
+        if (!blob) throw new Error(`当前语音配置（${vc.provider}）不支持语音合成，请换一个服务商`);
         const dataUrl = await new Promise<string>((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = () => resolve(reader.result as string);
@@ -2234,7 +2236,8 @@ function synthesizeVoiceForMessage(msgId: string, characterId: string, speechTex
 function VoiceMessageBubble({ msg, characterId, onUpdate, defaultTranslationExpanded = false }: { msg: ChatMessage; characterId?: string; onUpdate?: (m: ChatMessage) => void; defaultTranslationExpanded?: boolean }) {
     const [playing, setPlaying] = useState(false);
     const [synthesizing, setSynthesizing] = useState(false);
-    const [synthFailed, setSynthFailed] = useState(false);
+    // 存具体错误文案而不是布尔量：气泡上要显示原因，光说"合成失败"没法自查
+    const [synthError, setSynthError] = useState<string | null>(null);
     const audioRef = useRef<HTMLAudioElement | null>(null);
     const mountedRef = useRef(true);
     useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
@@ -2282,7 +2285,7 @@ function VoiceMessageBubble({ msg, characterId, onUpdate, defaultTranslationExpa
             return;
         }
         setSynthesizing(true);
-        setSynthFailed(false);
+        setSynthError(null);
         synthesizeVoiceForMessage(msg.id, characterId, speechText)
             .then((dataUrl) => {
                 if (onUpdate) onUpdate({ ...msg, mediaUrl: dataUrl, mediaData: { ...msg.mediaData, synthesizedFromText: speechText } });
@@ -2290,10 +2293,13 @@ function VoiceMessageBubble({ msg, characterId, onUpdate, defaultTranslationExpa
                 setSynthesizing(false);
                 playSrc(dataUrl);
             })
-            .catch(() => {
+            .catch((error: unknown) => {
+                // 留一条控制台记录：气泡上只显示一行摘要，细节（堆栈/响应体）在这里
+                console.warn("[VoiceMessage] 语音合成失败:", error);
                 if (!mountedRef.current) return;
                 setSynthesizing(false);
-                setSynthFailed(true);
+                const reason = error instanceof Error ? error.message : String(error);
+                setSynthError(reason.trim() || "未知错误（可打开开发者工具查看控制台）");
             });
     };
 
@@ -2308,6 +2314,7 @@ function VoiceMessageBubble({ msg, characterId, onUpdate, defaultTranslationExpa
     });
 
     return (
+        <>
         <div className="voice-msg-bubble" onClick={handlePlay}
             style={{ minWidth: `${Math.min(60 + duration * 8, 220)}px` }}
         >
@@ -2331,7 +2338,13 @@ function VoiceMessageBubble({ msg, characterId, onUpdate, defaultTranslationExpa
                     />
                 ))}
             </div>
-            <span className="voice-msg-dur">{synthFailed ? "合成失败·点击重试" : `${duration}"`}</span>
+            <span className="voice-msg-dur">{synthError ? "合成失败·点击重试" : `${duration}"`}</span>
         </div>
+        {synthError && (
+            // 失败原因直接摊在气泡下方：这条最常见的坑（语音配置没绑定）以前是静默的，
+            // 用户只能看到笼统的"合成失败"，无从自查。
+            <div className="voice-msg-error" role="alert" title={synthError}>{synthError}</div>
+        )}
+        </>
     );
 }
